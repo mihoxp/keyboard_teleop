@@ -1,0 +1,18 @@
+[Unit]
+Description=Drive car 2 with the USB 2.4G wireless gamepad
+After=micro-ros-agent.service
+
+[Service]
+Type=simple
+User=ros2
+# Read /dev/input without adding ros2 to the input group
+SupplementaryGroups=input
+Environment=ROS_DOMAIN_ID=20
+Environment=ROS_LOCALHOST_ONLY=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && exec python3 /home/ros2/pico/keyboard_teleop/gamepad_drive.py'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
