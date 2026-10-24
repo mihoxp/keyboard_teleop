@@ -4,15 +4,15 @@
 Reads the joystick device straight from /dev/input and publishes /car2/cmd_vel
 while a stick is pushed:
 
-  left stick up/down     forward / backward (proportional)
-  right stick left/right turn (proportional; both sticks combine into a curve)
+  left stick             up/down = forward / backward, left/right = turn
+                         (proportional, combine into a curve)
+  right stick            left/right = servo S1, up/down = servo S2: full push =
+                         0 / 180 deg, released = back to 90
   D-pad                  drive while held at the set speed, like the keyboard arrows
   X                      stop
   START                  horn while held
   L2 / R2                speed down / up: 30 / 50 / 75 / 100 %  (beep pitch = speed,
                          low buzz = already slowest / fastest)
-  L1 / R1                hold to turn servo S1 toward 0 / 180 deg, it stays where
-                         released; L1 + R1 together = back to 90
   triangle / circle / square / SELECT   line_track / avoid / light_follow / manual
 """
 import os
@@ -32,11 +32,13 @@ JS_EVENT_BUTTON, JS_EVENT_AXIS, JS_EVENT_INIT = 0x01, 0x02, 0x80
 
 # Mapped by pressing one control at a time 2026-10-24
 AXIS_THROTTLE = 1   # left stick Y, up = -32767
-AXIS_STEER = 2      # right stick X, right = +32767
+AXIS_STEER = 0      # left stick X, right = +32767
+AXIS_SERVO1 = 2     # right stick X, right = +32767
+AXIS_SERVO2 = 3     # right stick Y, up = -32767
 AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
 BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT, BTN_START = 6, 7, 8, 9, 10, 11
-# L2/R2 also move axes 5/4 (unused)
+# L2/R2 also move axes 5/4 (unused). Unused: L1, R1
 SPEED_DOWN, SPEED_UP = (BTN_L2,), (BTN_R2,)
 MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
          BTN_SQUARE: 'light_follow', BTN_SELECT: 'manual'}
@@ -53,8 +55,7 @@ LIMIT_BEEP = 200
 HORN_HZ, HORN_MS, HORN_PERIOD = 800, 300, 0.2
 PUBLISH_PERIOD = 0.1    # the firmware stops after 0.5 s without cmd_vel
 DEADZONE = 0.15         # pressing buttons nudges the sticks a little
-SERVO_RATE = 90.0       # deg/s while L1 / R1 is held
-SERVO_PERIOD = 0.05
+SERVO_PERIOD = 0.05     # max servo update rate while the right stick moves
 
 
 def stick(value):
@@ -79,10 +80,9 @@ def main():
     was_moving = False
     horn = False
     next_horn = 0.0
-    # Assumed until the first move: the car does not report servo angles
-    servo_angle = 90.0
-    servo_held = set()
-    last_servo = 0.0
+    servo_axes = {AXIS_SERVO1: 0, AXIS_SERVO2: 0}
+    sent_servo = None   # last [S1, S2] sent
+    next_servo = 0.0
     fd = None
 
     def publish_drive():
@@ -121,8 +121,7 @@ def main():
                 time.sleep(2)
                 continue
 
-        timeout = SERVO_PERIOD if servo_held else PUBLISH_PERIOD
-        ready, _, _ = select.select([fd], [], [], timeout)
+        ready, _, _ = select.select([fd], [], [], PUBLISH_PERIOD)
         if ready:
             try:
                 data = os.read(fd, EVENT.size * 64)
@@ -134,7 +133,8 @@ def main():
                 for a in axes:
                     axes[a] = 0
                 horn = False
-                servo_held.clear()
+                for a in servo_axes:
+                    servo_axes[a] = 0
                 if was_moving:
                     stop()
                 continue
@@ -146,6 +146,8 @@ def main():
                     if number in axes:
                         axes[number] = value
                         next_publish = 0.0
+                    elif number in servo_axes:
+                        servo_axes[number] = value
                     continue
                 if etype != JS_EVENT_BUTTON or init:
                     continue
@@ -154,16 +156,6 @@ def main():
                     next_horn = 0.0
                     if not horn:
                         beep(0, 0)
-                    continue
-                if number in (BTN_L1, BTN_R1):
-                    if value:
-                        servo_held.add(number)
-                    else:
-                        servo_held.discard(number)
-                    if servo_held == {BTN_L1, BTN_R1}:
-                        servo_angle = 90.0
-                        servo_pub.publish(UInt16MultiArray(data=[90]))
-                    last_servo = time.monotonic()
                     continue
                 # Other buttons act on presses only
                 if value != 1:
@@ -186,14 +178,17 @@ def main():
                     log.info(f'mode {MODES[number]}')
 
         now = time.monotonic()
-        if len(servo_held) == 1 and now - last_servo >= SERVO_PERIOD:
-            step = SERVO_RATE * (now - last_servo)
-            last_servo = now
-            target = servo_angle + (step if BTN_R1 in servo_held else -step)
-            target = max(0.0, min(180.0, target))
-            if round(target) != round(servo_angle):
-                servo_pub.publish(UInt16MultiArray(data=[round(target)]))
-            servo_angle = target
+        if now >= next_servo:
+            # Stick position = angle. Only changes are sent, so a centered
+            # stick does not override /car2/servo from other sources
+            angles = [round(90 + 90 * stick(servo_axes[AXIS_SERVO1])),
+                      round(90 - 90 * stick(servo_axes[AXIS_SERVO2]))]
+            if sent_servo is None:
+                sent_servo = angles     # nothing to send until the stick moves
+            elif angles != sent_servo:
+                next_servo = now + SERVO_PERIOD
+                servo_pub.publish(UInt16MultiArray(data=angles))
+                sent_servo = angles
         if horn and now >= next_horn:
             next_horn = now + HORN_PERIOD
             beep(HORN_HZ, HORN_MS)
