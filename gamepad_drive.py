@@ -8,6 +8,7 @@ while a stick is pushed:
   right stick left/right turn (proportional; both sticks combine into a curve)
   D-pad                  drive while held at the set speed, like the keyboard arrows
   X                      stop
+  START                  horn while held
   L1 or L2 / R1 or R2    speed down / up: 30 / 50 / 75 / 100 %  (beep pitch = speed,
                          low buzz = already slowest / fastest)
   triangle / circle / square / SELECT   line_track / avoid / light_follow / manual
@@ -32,8 +33,8 @@ AXIS_THROTTLE = 1   # left stick Y, up = -32767
 AXIS_STEER = 2      # right stick X, right = +32767
 AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
-BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT = 6, 7, 8, 9, 10
-# L2/R2 also move axes 5/4 (unused). Unused: START = 11
+BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT, BTN_START = 6, 7, 8, 9, 10, 11
+# L2/R2 also move axes 5/4 (unused)
 SPEED_DOWN, SPEED_UP = (BTN_L1, BTN_L2), (BTN_R1, BTN_R2)
 MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
          BTN_SQUARE: 'light_follow', BTN_SELECT: 'manual'}
@@ -45,6 +46,9 @@ SPEEDS = [0.3, 0.5, 0.75, 1.0]
 # Far apart so each speed is easy to tell by ear; a low buzz = already at the limit
 SPEED_BEEPS = [500, 1000, 2000, 3500]
 LIMIT_BEEP = 200
+# Horn: each beep lasts longer than the refresh period, so it sounds continuous
+# while held and still stops by itself if the release message is lost
+HORN_HZ, HORN_MS, HORN_PERIOD = 800, 300, 0.2
 PUBLISH_PERIOD = 0.1    # the firmware stops after 0.5 s without cmd_vel
 DEADZONE = 0.15         # pressing buttons nudges the sticks a little
 
@@ -68,6 +72,8 @@ def main():
     axes = {AXIS_THROTTLE: 0, AXIS_STEER: 0, AXIS_DPAD_X: 0, AXIS_DPAD_Y: 0}
     speed = 1   # index into SPEEDS
     was_moving = False
+    horn = False
+    next_horn = 0.0
     fd = None
 
     def publish_drive():
@@ -117,6 +123,7 @@ def main():
                 fd = None
                 for a in axes:
                     axes[a] = 0
+                horn = False
                 if was_moving:
                     stop()
                 continue
@@ -129,8 +136,16 @@ def main():
                         axes[number] = value
                         next_publish = 0.0
                     continue
-                # Buttons: act on presses only, not the initial state dump
-                if etype != JS_EVENT_BUTTON or init or value != 1:
+                if etype != JS_EVENT_BUTTON or init:
+                    continue
+                if number == BTN_START:
+                    horn = bool(value)
+                    next_horn = 0.0
+                    if not horn:
+                        beep(0, 0)
+                    continue
+                # Other buttons act on presses only
+                if value != 1:
                     continue
                 if number == BTN_CROSS:
                     stop()
@@ -150,6 +165,9 @@ def main():
                     log.info(f'mode {MODES[number]}')
 
         now = time.monotonic()
+        if horn and now >= next_horn:
+            next_horn = now + HORN_PERIOD
+            beep(HORN_HZ, HORN_MS)
         if now >= next_publish:
             next_publish = now + PUBLISH_PERIOD
             moving = publish_drive() if any(stick(v) for v in axes.values()) else False
