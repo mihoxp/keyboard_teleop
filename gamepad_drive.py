@@ -6,9 +6,10 @@ while a stick is pushed:
 
   left stick up/down     forward / backward (proportional)
   right stick left/right turn (proportional; both sticks combine into a curve)
-  D-pad                  drive while held at the L1/R1 speed, like the keyboard arrows
+  D-pad                  drive while held at the set speed, like the keyboard arrows
   X                      stop
-  L1 / R1                speed 30 / 50 / 75 / 100 %  (beep pitch = speed)
+  L1 or L2 / R1 or R2    speed down / up: 30 / 50 / 75 / 100 %  (beep pitch = speed,
+                         low buzz = already slowest / fastest)
   triangle / circle / square / SELECT   line_track / avoid / light_follow / manual
 """
 import os
@@ -31,8 +32,9 @@ AXIS_THROTTLE = 1   # left stick Y, up = -32767
 AXIS_STEER = 2      # right stick X, right = +32767
 AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
-BTN_L1, BTN_R1, BTN_SELECT = 6, 7, 10
-# Unused: L2 = button 8 (+ axis 5), R2 = button 9 (+ axis 4), START = 11
+BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT = 6, 7, 8, 9, 10
+# L2/R2 also move axes 5/4 (unused). Unused: START = 11
+SPEED_DOWN, SPEED_UP = (BTN_L1, BTN_L2), (BTN_R1, BTN_R2)
 MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
          BTN_SQUARE: 'light_follow', BTN_SELECT: 'manual'}
 
@@ -40,6 +42,9 @@ MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
 MAX_LINEAR = 0.5
 MAX_ANGULAR = 2 * 0.5 / 0.10
 SPEEDS = [0.3, 0.5, 0.75, 1.0]
+# Far apart so each speed is easy to tell by ear; a low buzz = already at the limit
+SPEED_BEEPS = [500, 1000, 2000, 3500]
+LIMIT_BEEP = 200
 PUBLISH_PERIOD = 0.1    # the firmware stops after 0.5 s without cmd_vel
 DEADZONE = 0.15         # pressing buttons nudges the sticks a little
 
@@ -129,10 +134,14 @@ def main():
                     continue
                 if number == BTN_CROSS:
                     stop()
-                elif number in (BTN_L1, BTN_R1):
-                    step = 1 if number == BTN_R1 else -1
-                    speed = max(0, min(len(SPEEDS) - 1, speed + step))
-                    beep(800 + 400 * speed)
+                elif number in SPEED_DOWN + SPEED_UP:
+                    step = 1 if number in SPEED_UP else -1
+                    new_speed = max(0, min(len(SPEEDS) - 1, speed + step))
+                    if new_speed == speed:
+                        beep(LIMIT_BEEP, 250)
+                        continue
+                    speed = new_speed
+                    beep(SPEED_BEEPS[speed], 150)
                     log.info(f'speed {int(SPEEDS[speed] * 100)}%')
                 elif number in MODES:
                     # A stop after this would switch the car back to manual
