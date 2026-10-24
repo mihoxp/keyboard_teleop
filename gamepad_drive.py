@@ -6,6 +6,7 @@ while a stick is pushed:
 
   left stick up/down     forward / backward (proportional)
   right stick left/right turn (proportional; both sticks combine into a curve)
+  D-pad                  drive while held at the L1/R1 speed, like the keyboard arrows
   X                      stop
   L1 / R1                speed 30 / 50 / 75 / 100 %  (beep pitch = speed)
   triangle / circle / square / SELECT   line_track / avoid / light_follow / manual
@@ -28,6 +29,7 @@ JS_EVENT_BUTTON, JS_EVENT_AXIS, JS_EVENT_INIT = 0x01, 0x02, 0x80
 # Mapped by pressing one control at a time 2026-10-24
 AXIS_THROTTLE = 1   # left stick Y, up = -32767
 AXIS_STEER = 2      # right stick X, right = +32767
+AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
 BTN_L1, BTN_R1, BTN_SELECT = 6, 7, 10
 # Unused: L2 = button 8 (+ axis 5), R2 = button 9 (+ axis 4), START = 11
@@ -58,15 +60,18 @@ def main():
     beep_pub = node.create_publisher(UInt16MultiArray, '/car2/buzzer', 10)
     log = node.get_logger()
 
-    axes = {AXIS_THROTTLE: 0, AXIS_STEER: 0}
+    axes = {AXIS_THROTTLE: 0, AXIS_STEER: 0, AXIS_DPAD_X: 0, AXIS_DPAD_Y: 0}
     speed = 1   # index into SPEEDS
     was_moving = False
     fd = None
 
     def publish_drive():
         frac = SPEEDS[speed]
-        linear = -stick(axes[AXIS_THROTTLE]) * frac * MAX_LINEAR
-        angular = -stick(axes[AXIS_STEER]) * frac * MAX_ANGULAR
+        # The stick wins while it is pushed; otherwise use the D-pad
+        throttle = stick(axes[AXIS_THROTTLE]) or stick(axes[AXIS_DPAD_Y])
+        steer = stick(axes[AXIS_STEER]) or stick(axes[AXIS_DPAD_X])
+        linear = -throttle * frac * MAX_LINEAR
+        angular = -steer * frac * MAX_ANGULAR
         msg = Twist()
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)
