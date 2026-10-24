@@ -13,6 +13,8 @@ while a stick is pushed:
   D-pad                  drive while held at the set speed, like the keyboard arrows
   X                      stop
   START                  horn while held
+  left stick press (L3)  auto lights on / off (turn signals, head / brake lights)
+  right stick press (R3) all 8 LEDs white on / off
   L2 / R2                speed down / up: 30 / 50 / 75 / 100 %  (beep pitch = speed,
                          low buzz = already slowest / fastest)
   triangle / circle / square / SELECT   line_track / avoid / light_follow / manual
@@ -24,7 +26,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String, UInt16MultiArray
+from std_msgs.msg import Bool, String, UInt16MultiArray, UInt32MultiArray
 
 DEVICE = '/dev/input/by-id/usb-0079_Controller-joystick'
 
@@ -40,6 +42,7 @@ AXIS_SERVO2 = 3     # right stick Y, up = -32767
 AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
 BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT, BTN_START = 6, 7, 8, 9, 10, 11
+BTN_L3, BTN_R3 = 13, 14   # stick presses
 # L2/R2 also move axes 5/4 (unused)
 SPEED_DOWN, SPEED_UP = (BTN_L2,), (BTN_R2,)
 MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
@@ -55,6 +58,9 @@ LIMIT_BEEP = 200
 # Horn: each beep lasts longer than the refresh period, so it sounds continuous
 # while held and still stops by itself if the release message is lost
 HORN_HZ, HORN_MS, HORN_PERIOD = 800, 300, 0.2
+# Half brightness: all 8 LEDs at full white draw ~0.5 A from the battery
+WHITE = 0x808080
+LED_COUNT = 8
 PUBLISH_PERIOD = 0.1    # the firmware stops after 0.5 s without cmd_vel
 DEADZONE = 0.15         # pressing buttons nudges the sticks a little
 SERVO_PERIOD = 0.05     # max servo update rate while the right stick / L1 / R1 moves
@@ -75,6 +81,8 @@ def main():
     cmd_pub = node.create_publisher(Twist, '/car2/cmd_vel', 10)
     mode_pub = node.create_publisher(String, '/car2/mode', 10)
     beep_pub = node.create_publisher(UInt16MultiArray, '/car2/buzzer', 10)
+    auto_lights_pub = node.create_publisher(Bool, '/car2/auto_lights', 10)
+    leds_pub = node.create_publisher(UInt32MultiArray, '/car2/leds', 10)
     servo_pub = node.create_publisher(UInt16MultiArray, '/car2/servo', 10)
     log = node.get_logger()
 
@@ -83,6 +91,8 @@ def main():
     was_moving = False
     horn = False
     next_horn = 0.0
+    # 'auto' / 'white' / 'off'; the firmware boots with auto lights on
+    lights = 'auto'
     servo_axes = {AXIS_SERVO1: 0, AXIS_SERVO2: 0}
     sent_servo = None   # last [S1, S2] sent
     next_servo = 0.0
@@ -195,6 +205,18 @@ def main():
                     speed = new_speed
                     beep(SPEED_BEEPS[speed], 150)
                     log.info(f'speed {int(SPEEDS[speed] * 100)}%')
+                elif number == BTN_L3:
+                    # Any /car2/leds message (white) already turned auto off
+                    lights = 'off' if lights == 'auto' else 'auto'
+                    auto_lights_pub.publish(Bool(data=lights == 'auto'))
+                    beep(1500 if lights == 'auto' else 600)
+                    log.info(f'lights {lights}')
+                elif number == BTN_R3:
+                    lights = 'off' if lights == 'white' else 'white'
+                    color = WHITE if lights == 'white' else 0
+                    leds_pub.publish(UInt32MultiArray(data=[color] * LED_COUNT))
+                    beep(1500 if lights == 'white' else 600)
+                    log.info(f'lights {lights}')
                 elif number in MODES:
                     # A stop after this would switch the car back to manual
                     was_moving = False
