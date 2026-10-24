@@ -8,6 +8,8 @@ while a stick is pushed:
                          (proportional, combine into a curve)
   right stick            left/right = servo S1, up/down = servo S2: full push =
                          0 / 180 deg, released = back to 90
+  L1 / R1                hold to turn servo S3 toward 0 / 180 deg, it stays where
+                         released; L1 + R1 together = back to 90
   D-pad                  drive while held at the set speed, like the keyboard arrows
   X                      stop
   START                  horn while held
@@ -38,7 +40,7 @@ AXIS_SERVO2 = 3     # right stick Y, up = -32767
 AXIS_DPAD_X, AXIS_DPAD_Y = 6, 7     # digital: -32767 / 0 / +32767, up = -
 BTN_CROSS, BTN_CIRCLE, BTN_SQUARE, BTN_TRIANGLE = 0, 1, 3, 4
 BTN_L1, BTN_R1, BTN_L2, BTN_R2, BTN_SELECT, BTN_START = 6, 7, 8, 9, 10, 11
-# L2/R2 also move axes 5/4 (unused). Unused: L1, R1
+# L2/R2 also move axes 5/4 (unused)
 SPEED_DOWN, SPEED_UP = (BTN_L2,), (BTN_R2,)
 MODES = {BTN_TRIANGLE: 'line_track', BTN_CIRCLE: 'avoid',
          BTN_SQUARE: 'light_follow', BTN_SELECT: 'manual'}
@@ -55,7 +57,8 @@ LIMIT_BEEP = 200
 HORN_HZ, HORN_MS, HORN_PERIOD = 800, 300, 0.2
 PUBLISH_PERIOD = 0.1    # the firmware stops after 0.5 s without cmd_vel
 DEADZONE = 0.15         # pressing buttons nudges the sticks a little
-SERVO_PERIOD = 0.05     # max servo update rate while the right stick moves
+SERVO_PERIOD = 0.05     # max servo update rate while the right stick / L1 / R1 moves
+SERVO3_RATE = 90.0      # deg/s while L1 / R1 is held
 
 
 def stick(value):
@@ -83,6 +86,10 @@ def main():
     servo_axes = {AXIS_SERVO1: 0, AXIS_SERVO2: 0}
     sent_servo = None   # last [S1, S2] sent
     next_servo = 0.0
+    # Assumed until the first move: the car does not report servo angles
+    servo3_angle = 90.0
+    servo3_held = set()
+    last_servo3 = 0.0
     fd = None
 
     def publish_drive():
@@ -106,6 +113,11 @@ def main():
             cmd_pub.publish(msg)
         was_moving = False
 
+    def publish_servo3():
+        # /car2/servo is [S1, S2, S3]: repeat what the right stick last sent
+        s1, s2 = sent_servo if sent_servo else (90, 90)
+        servo_pub.publish(UInt16MultiArray(data=[s1, s2, round(servo3_angle)]))
+
     def beep(freq, ms=80):
         beep_pub.publish(UInt16MultiArray(data=[freq, ms]))
 
@@ -121,7 +133,8 @@ def main():
                 time.sleep(2)
                 continue
 
-        ready, _, _ = select.select([fd], [], [], PUBLISH_PERIOD)
+        timeout = SERVO_PERIOD if servo3_held else PUBLISH_PERIOD
+        ready, _, _ = select.select([fd], [], [], timeout)
         if ready:
             try:
                 data = os.read(fd, EVENT.size * 64)
@@ -135,6 +148,7 @@ def main():
                 horn = False
                 for a in servo_axes:
                     servo_axes[a] = 0
+                servo3_held.clear()
                 if was_moving:
                     stop()
                 continue
@@ -157,6 +171,16 @@ def main():
                     if not horn:
                         beep(0, 0)
                     continue
+                if number in (BTN_L1, BTN_R1):
+                    if value:
+                        servo3_held.add(number)
+                    else:
+                        servo3_held.discard(number)
+                    if servo3_held == {BTN_L1, BTN_R1}:
+                        servo3_angle = 90.0
+                        publish_servo3()
+                    last_servo3 = time.monotonic()
+                    continue
                 # Other buttons act on presses only
                 if value != 1:
                     continue
@@ -178,6 +202,14 @@ def main():
                     log.info(f'mode {MODES[number]}')
 
         now = time.monotonic()
+        if len(servo3_held) == 1 and now - last_servo3 >= SERVO_PERIOD:
+            step = SERVO3_RATE * (now - last_servo3)
+            last_servo3 = now
+            old = round(servo3_angle)
+            servo3_angle += step if BTN_R1 in servo3_held else -step
+            servo3_angle = max(0.0, min(180.0, servo3_angle))
+            if round(servo3_angle) != old:
+                publish_servo3()
         if now >= next_servo:
             # Stick position = angle. Only changes are sent, so a centered
             # stick does not override /car2/servo from other sources
