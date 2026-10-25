@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Drive car 2 with the YAHBOOM USB 2.4G wireless gamepad (DragonRise 0079:181c).
 
-Reads the joystick device straight from /dev/input and publishes /car2/cmd_vel
+Reads the joystick device straight from /dev/input and publishes /car2/cmd_vel_raw
+(car2_safety relays it to /car2/cmd_vel)
 while a stick is pushed:
 
   left stick             up/down = forward / backward, left/right = turn
@@ -78,7 +79,7 @@ def stick(value):
 def main():
     rclpy.init()
     node = rclpy.create_node('car2_gamepad_drive')
-    cmd_pub = node.create_publisher(Twist, '/car2/cmd_vel', 10)
+    cmd_pub = node.create_publisher(Twist, '/car2/cmd_vel_raw', 10)  # car2_safety relays it
     mode_pub = node.create_publisher(String, '/car2/mode', 10)
     beep_pub = node.create_publisher(UInt16MultiArray, '/car2/buzzer', 10)
     auto_lights_pub = node.create_publisher(Bool, '/car2/auto_lights', 10)

@@ -2,7 +2,7 @@
 """Drive car 2 with the Pi's USB wireless keyboard, no screen or terminal needed.
 
 Reads key events straight from /dev/input (needs the 'input' group) and
-publishes /car2/cmd_vel while a drive key is held:
+publishes /car2/cmd_vel_raw (car2_safety relays it to /car2/cmd_vel) while a drive key is held:
 
   arrows / WASD   drive (hold; two keys combine, e.g. up + left = curve left)
   space           stop
@@ -52,7 +52,7 @@ KEY_TIMEOUT = 0.6
 def main():
     rclpy.init()
     node = rclpy.create_node('car2_keyboard_drive')
-    cmd_pub = node.create_publisher(Twist, '/car2/cmd_vel', 10)
+    cmd_pub = node.create_publisher(Twist, '/car2/cmd_vel_raw', 10)  # car2_safety relays it
     mode_pub = node.create_publisher(String, '/car2/mode', 10)
     beep_pub = node.create_publisher(UInt16MultiArray, '/car2/buzzer', 10)
     log = node.get_logger()
